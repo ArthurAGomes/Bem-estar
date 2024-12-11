@@ -6,6 +6,7 @@ import {
   ScrollView,
   Share,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { useDataStore } from "../../store/data";
 import { api } from "../../services/api";
@@ -14,6 +15,7 @@ import { colors } from "../../constants/colors";
 import { Data } from "../../types/data";
 import { Link, router } from "expo-router";
 import { Ionicons, Feather } from "@expo/vector-icons";
+import { useEffect, useState } from "react";
 
 interface ResponseData {
   data: Data;
@@ -21,13 +23,36 @@ interface ResponseData {
 
 export default function Nutrition() {
   const user = useDataStore((state) => state.user);
+  const [storedDiet, setStoredDiet] = useState<Data | null>(null);
 
+  // Function to save diet to AsyncStorage
+  const saveDietToStorage = async (dietData: Data) => {
+    try {
+      await AsyncStorage.setItem("savedDiet", JSON.stringify(dietData));
+    } catch (error) {
+      console.error("Error saving diet to storage", error);
+    }
+  };
+
+  // Function to load diet from AsyncStorage
+  const loadDietFromStorage = async () => {
+    try {
+      const savedDiet = await AsyncStorage.getItem("savedDiet");
+      if (savedDiet) {
+        setStoredDiet(JSON.parse(savedDiet));
+      }
+    } catch (error) {
+      console.error("Error loading diet from storage", error);
+    }
+  };
+
+  // Query to fetch diet data
   const { data, isFetching, error } = useQuery({
     queryKey: ["nutrition"],
     queryFn: async () => {
       try {
         if (!user) {
-          throw new Error("Filed load nutrition");
+          throw new Error("Failed to load nutrition");
         }
 
         const response = await api.post<ResponseData>("/create", {
@@ -40,6 +65,9 @@ export default function Nutrition() {
           level: user.level,
         });
 
+        // Save the newly fetched diet to storage
+        await saveDietToStorage(response.data.data);
+
         return response.data.data;
       } catch (err) {
         console.log(err);
@@ -47,20 +75,32 @@ export default function Nutrition() {
     },
   });
 
+  // Load saved diet on component mount
+  useEffect(() => {
+    loadDietFromStorage();
+  }, []);
+
+  // Determine which diet data to use
+  const displayData = data || storedDiet;
+
   async function handleShare() {
     try {
-      if (data && Object.keys(data).length === 0) return;
+      if (!displayData || Object.keys(displayData).length === 0) return;
 
-      const supplements = `${data?.suplementos.map((item) => ` ${item}`)}`;
+      const supplements = displayData.suplementos
+        .map((item) => item)
+        .join(", ");
 
-      const foods = `${data?.refeicoes.map(
-        (item) =>
-          `\n- Nome: ${item.nome}\n- Horário: ${
-            item.horario
-          }\n- Alimentos: ${item.alimentos.map((alimento) => ` ${alimento}`)}`
-      )}`;
+      const foods = displayData.refeicoes
+        .map(
+          (item) =>
+            `\n- Nome: ${item.nome}\n- Horário: ${
+              item.horario
+            }\n- Alimentos: ${item.alimentos.join(", ")}`
+        )
+        .join("\n");
 
-      const message = `Dieta: ${data?.nome} - Objetivo: ${data?.objetivo}\n\n${foods}\n\n- Dica Suplemento: ${supplements}`;
+      const message = `Dieta: ${displayData.nome} - Objetivo: ${displayData.objetivo}\n\n${foods}\n\n- Dica Suplemento: ${supplements}`;
 
       await Share.share({
         message: message,
@@ -70,7 +110,18 @@ export default function Nutrition() {
     }
   }
 
-  if (isFetching) {
+  // Clear saved diet
+  const handleClearDiet = async () => {
+    try {
+      await AsyncStorage.removeItem("savedDiet");
+      setStoredDiet(null);
+      router.replace("/");
+    } catch (error) {
+      console.error("Error clearing diet", error);
+    }
+  };
+
+  if (isFetching && !storedDiet) {
     return (
       <View style={styles.loading}>
         <Text style={styles.loadingText}>Estamos gerando sua dieta!</Text>
@@ -79,7 +130,7 @@ export default function Nutrition() {
     );
   }
 
-  if (error) {
+  if (error && !storedDiet) {
     return (
       <View style={styles.loading}>
         <Text style={styles.loadingText}>Falha ao gerar dieta!</Text>
@@ -103,15 +154,15 @@ export default function Nutrition() {
       </View>
 
       <View style={{ paddingLeft: 16, paddingRight: 16, flex: 1 }}>
-        {data && Object.keys(data).length > 0 && (
+        {displayData && Object.keys(displayData).length > 0 && (
           <>
-            <Text style={styles.name}>Nome: {data.nome}</Text>
-            <Text style={styles.objective}>Foco: {data.objetivo}</Text>
+            <Text style={styles.name}>Nome: {displayData.nome}</Text>
+            <Text style={styles.objective}>Foco: {displayData.objetivo}</Text>
 
             <Text style={styles.label}>Refeições:</Text>
             <ScrollView>
               <View style={styles.foods}>
-                {data.refeicoes.map((refeicao) => (
+                {displayData.refeicoes.map((refeicao) => (
                   <View key={refeicao.nome} style={styles.food}>
                     <View style={styles.foodHeader}>
                       <Text style={styles.foodName}>{refeicao.nome}</Text>
@@ -133,15 +184,12 @@ export default function Nutrition() {
 
               <View style={styles.supplements}>
                 <Text style={styles.foodName}>Dica suplementos:</Text>
-                {data.suplementos.map((item) => (
+                {displayData.suplementos.map((item) => (
                   <Text key={item}>{item}</Text>
                 ))}
               </View>
 
-              <Pressable
-                style={styles.button}
-                onPress={() => router.replace("/")}
-              >
+              <Pressable style={styles.button} onPress={handleClearDiet}>
                 <Text style={styles.buttonText}>Gerar nova dieta</Text>
               </Pressable>
             </ScrollView>
